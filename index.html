@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ポケモン ヒットアンドブロー</title>
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  min-height:100vh;
+  font-family:"Yu Gothic","Hiragino Kaku Gothic ProN",sans-serif;
+  background:linear-gradient(135deg,#e53935 0 48%,#222 48% 52%,#f7f7f7 52%);
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  padding:20px;
+}
+.game{
+  width:min(560px,100%);
+  background:#fff;
+  border:5px solid #222;
+  border-radius:26px;
+  padding:24px;
+  box-shadow:0 14px 0 #222,0 20px 30px #0005;
+}
+h1{
+  margin:0;
+  text-align:center;
+  color:#ffcc00;
+  font-size:30px;
+  text-shadow:2px 2px 0 #2b5fb8,-2px 2px 0 #2b5fb8,2px -2px 0 #2b5fb8,-2px -2px 0 #2b5fb8;
+}
+.sub{
+  text-align:center;
+  color:#555;
+  margin:8px 0 18px;
+}
+.panel{
+  background:#eef7ff;
+  border:4px solid #222;
+  border-radius:18px;
+  padding:16px;
+  text-align:center;
+}
+#status{
+  font-weight:bold;
+  line-height:1.7;
+}
+.slots{
+  display:flex;
+  justify-content:center;
+  gap:8px;
+  margin-top:14px;
+}
+.slot{
+  width:42px;
+  height:48px;
+  border:3px solid #222;
+  border-radius:10px;
+  background:#fff;
+  display:grid;
+  place-items:center;
+  font-size:24px;
+  font-weight:bold;
+}
+.controls{
+  display:flex;
+  gap:8px;
+  margin-top:16px;
+}
+input{
+  flex:1;
+  min-width:0;
+  font-size:18px;
+  padding:13px;
+  border:4px solid #222;
+  border-radius:14px;
+}
+button{
+  font-weight:bold;
+  font-size:16px;
+  padding:12px 14px;
+  border:4px solid #222;
+  border-radius:14px;
+  background:#ffcc00;
+  cursor:pointer;
+  box-shadow:0 5px 0 #222;
+}
+button:active{
+  transform:translateY(5px);
+  box-shadow:none;
+}
+.buttons{
+  display:flex;
+  gap:8px;
+  margin-top:10px;
+}
+.buttons button{
+  flex:1;
+  background:#fff;
+}
+.info{
+  display:flex;
+  justify-content:space-between;
+  margin:14px 2px;
+  font-weight:bold;
+}
+#history{
+  display:grid;
+  gap:8px;
+  max-height:280px;
+  overflow:auto;
+}
+.row{
+  display:grid;
+  grid-template-columns:1fr auto;
+  gap:8px;
+  padding:10px 12px;
+  border:3px solid #222;
+  border-radius:14px;
+  background:#fff;
+}
+.result{
+  color:#e53935;
+  font-weight:bold;
+}
+.small{
+  font-size:13px;
+  color:#666;
+}
+</style>
+</head>
+
+<body>
+<div class="game">
+  <h1>Pokémon Hit & Blow</h1>
+  <div class="sub">ポケモン名を当てるヒットアンドブロー</div>
+
+  <div class="panel">
+    <div id="status">ポケモンデータを読み込み中...</div>
+    <div id="slots" class="slots"></div>
+    <div class="small">同じ文字がある場合も正しく判定します</div>
+  </div>
+
+  <div class="controls">
+    <input id="guessInput" list="pokemonList" placeholder="例：ピカチュウ" disabled>
+    <button id="guessButton" disabled>判定</button>
+  </div>
+
+  <datalist id="pokemonList"></datalist>
+
+  <div class="buttons">
+    <button id="resetButton">リセット</button>
+    <button id="hintButton">ヒント</button>
+  </div>
+
+  <div class="info">
+    <span id="tryText">挑戦回数：0</span>
+    <span id="poolText">対象：読み込み中</span>
+  </div>
+
+  <div id="history"></div>
+</div>
+
+<script>
+const API_URL = "https://pokeapi.co/api/v2/pokemon-species?limit=20000";
+const CACHE_KEY = "pokemon_hit_blow_names_v1";
+
+let pokemonNames = [];
+let answer = "";
+let attempts = 0;
+let cleared = false;
+
+const statusEl = document.getElementById("status");
+const slotsEl = document.getElementById("slots");
+const inputEl = document.getElementById("guessInput");
+const guessButton = document.getElementById("guessButton");
+const resetButton = document.getElementById("resetButton");
+const hintButton = document.getElementById("hintButton");
+const historyEl = document.getElementById("history");
+const tryText = document.getElementById("tryText");
+const poolText = document.getElementById("poolText");
+const pokemonList = document.getElementById("pokemonList");
+
+async function loadPokemonNames(){
+  const cache = localStorage.getItem(CACHE_KEY);
+
+  if(cache){
+    pokemonNames = JSON.parse(cache);
+    setupGame();
+    return;
+  }
+
+  try{
+    statusEl.textContent = "ポケモン一覧を取得中...";
+
+    const listRes = await fetch(API_URL);
+    const listData = await listRes.json();
+    const species = listData.results;
+
+    const names = [];
+    const batchSize = 25;
+
+    for(let i = 0; i < species.length; i += batchSize){
+      const batch = species.slice(i, i + batchSize);
+
+      const results = await Promise.allSettled(
+        batch.map(p => fetch(p.url).then(r => r.json()))
+      );
+
+      for(const r of results){
+        if(r.status !== "fulfilled") continue;
+
+        const nameObj =
+          r.value.names.find(n => n.language.name === "ja-Hrkt") ||
+          r.value.names.find(n => n.language.name === "ja");
+
+        if(nameObj){
+          names.push(nameObj.name);
+        }
+      }
+
+      statusEl.textContent = `日本語名を取得中... ${Math.min(i + batchSize, species.length)} / ${species.length}`;
+    }
+
+    pokemonNames = [...new Set(names)].sort((a,b)=>a.localeCompare(b,"ja"));
+
+    localStorage.setItem(CACHE_KEY, JSON.stringify(pokemonNames));
+    setupGame();
+
+  }catch(e){
+    console.error(e);
+    statusEl.textContent = "読み込みに失敗しました。ページを再読み込みしてください。";
+  }
+}
+
+function setupGame(){
+  poolText.textContent = `対象：${pokemonNames.length}匹`;
+
+  pokemonList.innerHTML = "";
+  pokemonNames.forEach(name=>{
+    const option = document.createElement("option");
+    option.value = name;
+    pokemonList.appendChild(option);
+  });
+
+  inputEl.disabled = false;
+  guessButton.disabled = false;
+
+  startGame();
+}
+
+function startGame(){
+  answer = pokemonNames[Math.floor(Math.random() * pokemonNames.length)];
+  attempts = 0;
+  cleared = false;
+
+  historyEl.innerHTML = "";
+  inputEl.value = "";
+  inputEl.disabled = false;
+  guessButton.disabled = false;
+
+  tryText.textContent = "挑戦回数：0";
+  statusEl.textContent = `ゲーム開始！今回は ${[...answer].length}文字 のポケモンです。`;
+
+  renderSlots(false);
+
+  console.log("答え:", answer);
+}
+
+function renderSlots(show){
+  slotsEl.innerHTML = "";
+  [...answer].forEach(ch=>{
+    const div = document.createElement("div");
+    div.className = "slot";
+    div.textContent = show ? ch : "？";
+    slotsEl.appendChild(div);
+  });
+}
+
+function checkGuess(){
+  if(cleared) return;
+
+  const guess = inputEl.value.trim();
+  const answerChars = [...answer];
+  const guessChars = [...guess];
+
+  if(!pokemonNames.includes(guess)){
+    alert("ポケモン名を正しく入力してください。");
+    return;
+  }
+
+  if(guessChars.length !== answerChars.length){
+    alert(`${answerChars.length}文字のポケモンを入力してください。`);
+    return;
+  }
+
+  attempts++;
+  tryText.textContent = `挑戦回数：${attempts}`;
+
+  const {hit, blow} = judge(answerChars, guessChars);
+  addHistory(guess, hit, blow);
+
+  if(hit === answerChars.length){
+    cleared = true;
+    statusEl.textContent = `正解！答えは「${answer}」でした！`;
+    renderSlots(true);
+    inputEl.disabled = true;
+    guessButton.disabled = true;
+  }else{
+    statusEl.textContent = `${hit} HIT / ${blow} BLOW`;
+  }
+
+  inputEl.value = "";
+  inputEl.focus();
+}
+
+function judge(answerChars, guessChars){
+  const len = answerChars.length;
+  const usedA = Array(len).fill(false);
+  const usedG = Array(len).fill(false);
+
+  let hit = 0;
+  let blow = 0;
+
+  for(let i=0;i<len;i++){
+    if(answerChars[i] === guessChars[i]){
+      hit++;
+      usedA[i] = true;
+      usedG[i] = true;
+    }
+  }
+
+  for(let i=0;i<len;i++){
+    if(usedG[i]) continue;
+
+    for(let j=0;j<len;j++){
+      if(!usedA[j] && guessChars[i] === answerChars[j]){
+        blow++;
+        usedA[j] = true;
+        break;
+      }
+    }
+  }
+
+  return {hit, blow};
+}
+
+function addHistory(guess, hit, blow){
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = `
+    <div>${guess}</div>
+    <div class="result">${hit} HIT / ${blow} BLOW</div>
+  `;
+  historyEl.prepend(row);
+}
+
+function showHint(){
+  if(!answer) return;
+
+  const chars = [...answer];
+
+  if(attempts < 3){
+    alert(`ヒント：${chars.length}文字です。`);
+  }else if(attempts < 6){
+    alert(`ヒント：最初の文字は「${chars[0]}」です。`);
+  }else{
+    alert(`ヒント：最初は「${chars[0]}」、最後は「${chars[chars.length-1]}」です。`);
+  }
+}
+
+guessButton.addEventListener("click", checkGuess);
+resetButton.addEventListener("click", startGame);
+hintButton.addEventListener("click", showHint);
+
+inputEl.addEventListener("keydown", e=>{
+  if(e.key === "Enter") checkGuess();
+});
+
+loadPokemonNames();
+</script>
+</body>
+</html>
